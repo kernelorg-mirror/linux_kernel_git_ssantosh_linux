@@ -43,7 +43,7 @@ struct bind_bucket {
 	struct hlist_head	head;
 };
 
-#define BIND_HASH_SIZE 1024
+#define BIND_HASH_SIZE 8192
 static struct bind_bucket bind_hash_table[BIND_HASH_SIZE];
 
 static struct bind_bucket *hash_to_bucket(__be32 addr, __be16 port)
