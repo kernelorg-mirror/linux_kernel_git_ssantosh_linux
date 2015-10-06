@@ -47,6 +47,7 @@
 unsigned int rds_ib_mr_1m_pool_size = RDS_MR_1M_POOL_SIZE;
 unsigned int rds_ib_mr_8k_pool_size = RDS_MR_8K_POOL_SIZE;
 unsigned int rds_ib_retry_count = RDS_IB_DEFAULT_RETRY_COUNT;
+bool prefer_frmr;
 
 module_param(rds_ib_mr_1m_pool_size, int, 0444);
 MODULE_PARM_DESC(rds_ib_mr_1m_pool_size, " Max number of 1M mr per HCA");
@@ -54,6 +55,8 @@ module_param(rds_ib_mr_8k_pool_size, int, 0444);
 MODULE_PARM_DESC(rds_ib_mr_8k_pool_size, " Max number of 8K mr per HCA");
 module_param(rds_ib_retry_count, int, 0444);
 MODULE_PARM_DESC(rds_ib_retry_count, " Number of hw retries before reporting an error");
+module_param(prefer_frmr, bool, 0444);
+MODULE_PARM_DESC(prefer_frmr, "Preferred MR method if both FMR and FRMR supported");
 
 /*
  * we have a clumsy combination of RCU and a rwsem protecting this list
@@ -140,6 +143,13 @@ static void rds_ib_add_one(struct ib_device *device)
 	rds_ibdev->max_wrs = device->attrs.max_qp_wr;
 	rds_ibdev->max_sge = min(device->attrs.max_sge, RDS_IB_MAX_SGE);
 
+	rds_ibdev->has_fr = (device->attrs.device_cap_flags &
+				  IB_DEVICE_MEM_MGT_EXTENSIONS);
+	rds_ibdev->has_fmr = (device->alloc_fmr && device->dealloc_fmr &&
+			    device->map_phys_fmr && device->unmap_fmr);
+	rds_ibdev->use_fastreg = (rds_ibdev->has_fr &&
+				 (!rds_ibdev->has_fmr || prefer_frmr));
+
 	rds_ibdev->fmr_max_remaps = device->attrs.max_map_per_fmr?: 32;
 	rds_ibdev->max_1m_mrs = device->attrs.max_mr ?
 		min_t(unsigned int, (device->attrs.max_mr / 2),
@@ -177,6 +187,10 @@ static void rds_ib_add_one(struct ib_device *device)
 		 device->attrs.max_fmr, rds_ibdev->max_wrs, rds_ibdev->max_sge,
 		 rds_ibdev->fmr_max_remaps, rds_ibdev->max_1m_mrs,
 		 rds_ibdev->max_8k_mrs);
+
+	pr_info("RDS/IB: %s: %s supported and preferred\n",
+		device->name,
+		rds_ibdev->use_fastreg ? "FRMR" : "FMR");
 
 	INIT_LIST_HEAD(&rds_ibdev->ipaddr_list);
 	INIT_LIST_HEAD(&rds_ibdev->conn_list);
