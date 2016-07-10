@@ -313,6 +313,7 @@ static int rds_ib_conn_info_visitor(struct rds_connection *conn,
 		iinfo->max_send_wr = ic->i_send_ring.w_nr;
 		iinfo->max_recv_wr = ic->i_recv_ring.w_nr;
 		iinfo->max_send_sge = rds_ibdev->max_sge;
+		iinfo->cache_allocs = atomic_read(&ic->i_cache_allocs);
 		rds_ib_get_mr_info(rds_ibdev, iinfo);
 	}
 	return 1;
