@@ -183,6 +183,7 @@ struct rds_info_rdma_connection {
 	uint32_t	max_send_sge;
 	uint32_t	rdma_mr_max;
 	uint32_t	rdma_mr_size;
+	uint32_t	cache_allocs;
 };
 
 /* RDS message Receive Path Latency points */
