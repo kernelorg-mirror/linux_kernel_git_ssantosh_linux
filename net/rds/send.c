@@ -1155,6 +1155,12 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 		rs->rs_seen_congestion = 1;
 		goto out;
 	}
+
+	if (!rds_conn_up(conn)) {
+		ret = -EAGAIN;
+		goto out;
+	}
+
 	while (!rds_send_queue_rm(rs, conn, cpath, rm, rs->rs_bound_port,
 				  dport, &queued)) {
 		rds_stats_inc(s_send_queue_full);
