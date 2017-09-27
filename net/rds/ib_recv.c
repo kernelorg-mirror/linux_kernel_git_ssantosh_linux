@@ -177,7 +177,12 @@ void rds_ib_recv_free_caches(struct rds_ib_connection *ic)
 	list_for_each_entry_safe(frag, frag_tmp, &list, f_cache_entry) {
 		list_del(&frag->f_cache_entry);
 		WARN_ON(!list_empty(&frag->f_item));
+		list_del_init(&frag->f_item);
+		__free_page(sg_page(&frag->f_sg));
+		atomic_sub(RDS_FRAG_SIZE / PAGE_SIZE, &rds_ib_allocation);
 		kmem_cache_free(rds_ib_frag_slab, frag);
+		atomic_sub(RDS_FRAG_SIZE / SZ_1K, &ic->i_cache_allocs);
+		rds_ib_stats_add(s_ib_recv_removed_from_cache, RDS_FRAG_SIZE);
 	}
 }
 
