@@ -186,6 +186,30 @@ void rds_ib_recv_free_caches(struct rds_ib_connection *ic)
 	}
 }
 
+/* Called form rds_ib_conn_complete() and takes action only
+ * if new connection needs different frag size than what is used.
+ */
+void rds_ib_recv_rebuild_caches(struct rds_ib_connection *ic)
+{
+	/* init it with the used frag size */
+	if (!ic->i_frag_cache_sz) {
+		ic->i_frag_cache_sz = ic->i_frag_sz;
+		return;
+	}
+
+	/* check if existing cache can be re-used */
+	if (ic->i_frag_cache_sz == ic->i_frag_sz)
+		return;
+
+	/* Now re-build the caches */
+	rds_ib_recv_free_caches(ic);
+	rds_ib_recv_alloc_caches(ic);
+
+	pr_debug("RDS/IB: Rebuild caches for ic %p i_cm_id %p, frag{%d->%d}\n",
+		 ic, ic->i_cm_id, ic->i_frag_cache_sz, ic->i_frag_sz);
+	ic->i_frag_cache_sz = ic->i_frag_sz;
+}
+
 /* fwd decl */
 static void rds_ib_recv_cache_put(struct list_head *new_item,
 				  struct rds_ib_refill_cache *cache);

@@ -181,6 +181,7 @@ struct rds_ib_connection {
 	/* Protocol version specific information */
 	unsigned int		i_flowctl:1;	/* enable/disable flow ctl */
 	u16			i_frag_sz;	/* IB fragment size */
+	u16			i_frag_cache_sz;
 	u8			i_frag_pages;
 
 	/* Batched completions */
@@ -377,6 +378,7 @@ void rds_ib_recv_exit(void);
 int rds_ib_recv_path(struct rds_conn_path *conn);
 int rds_ib_recv_alloc_caches(struct rds_ib_connection *ic);
 void rds_ib_recv_free_caches(struct rds_ib_connection *ic);
+void rds_ib_recv_rebuild_caches(struct rds_ib_connection *ic);
 void rds_ib_recv_refill(struct rds_connection *conn, int prefill, gfp_t gfp);
 void rds_ib_inc_free(struct rds_incoming *inc);
 int rds_ib_inc_copy_to_user(struct rds_incoming *inc, struct iov_iter *to);

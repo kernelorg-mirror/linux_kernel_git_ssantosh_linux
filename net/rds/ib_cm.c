@@ -135,6 +135,7 @@ void rds_ib_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
 	 * from 3.1 to 4.1.
 	 */
 	rds_ib_send_init_ring(ic);
+	rds_ib_recv_rebuild_caches(ic);
 	rds_ib_recv_init_ring(ic);
 	/* Post receive buffers - as a side effect, this will update
 	 * the posted credit count. */
@@ -940,6 +941,7 @@ void rds_ib_conn_path_shutdown(struct rds_conn_path *cp)
 	vfree(ic->i_recvs);
 	ic->i_recvs = NULL;
 	ic->i_active_side = false;
+
 }
 
 int rds_ib_conn_alloc(struct rds_connection *conn, gfp_t gfp)
