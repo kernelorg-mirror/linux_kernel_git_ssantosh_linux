@@ -30,7 +30,7 @@ extern struct rw_semaphore rds_ib_devices_lock;
 extern struct list_head rds_ib_devices;
 
 /*
- * IB posts RDS_FRAG_SIZE fragments of pages to the receive queues to
+ * IB posts i_frag_sz fragments of pages to the receive queues to
  * try and minimize the amount of memory tied up both the device and
  * socket receive queues.
  */
@@ -180,6 +180,8 @@ struct rds_ib_connection {
 
 	/* Protocol version specific information */
 	unsigned int		i_flowctl:1;	/* enable/disable flow ctl */
+	u16			i_frag_sz;	/* IB fragment size */
+	u8			i_frag_pages;
 
 	/* Batched completions */
 	unsigned int		i_unsignaled_wrs;
