@@ -64,6 +64,23 @@ static void rds_ib_set_flow_control(struct rds_connection *conn, u32 credits)
 	}
 }
 
+static u16 rds_ib_set_frag_size(u16 frag, struct ib_device *dev)
+{
+	struct rds_ib_device *rds_ibdev;
+	u16 frag_sz = PAGE_SIZE;
+
+	rds_ibdev = rds_ib_get_client_data(dev);
+	if (!rds_ibdev) {
+		pr_debug("rds_ibdev is NULL\n");
+		goto rds_ibdev_out;
+	}
+	frag_sz = min_t(u16, frag, rds_ibdev->max_sge * PAGE_SIZE);
+
+rds_ibdev_out:
+	rds_ib_dev_put(rds_ibdev);
+	return frag_sz;
+}
+
 /*
  * Tune RNR behavior. Without flow control, we use a rather
  * low timeout, but not the absolute minimum - this should
@@ -488,7 +505,7 @@ static int rds_ib_setup_qp(struct rds_connection *conn)
 	attr.cap.max_send_wr = ic->i_send_ring.w_nr + fr_queue_space + 1;
 	attr.cap.max_recv_wr = ic->i_recv_ring.w_nr + 1;
 	attr.cap.max_send_sge = rds_ibdev->max_sge;
-	attr.cap.max_recv_sge = RDS_IB_RECV_SGE;
+	attr.cap.max_recv_sge = rds_ibdev->max_sge;
 	attr.sq_sig_type = IB_SIGNAL_REQ_WR;
 	attr.qp_type = IB_QPT_RC;
 	attr.send_cq = ic->i_send_cq;
@@ -632,6 +649,7 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 	__be64 lguid = cm_id->route.path_rec->sgid.global.interface_id;
 	__be64 fguid = cm_id->route.path_rec->dgid.global.interface_id;
 	const struct rds_ib_connect_private *dp = event->param.conn.private_data;
+	struct ib_device *dev = cm_id->device;
 	struct rds_ib_connect_private dp_rep;
 	struct rds_connection *conn = NULL;
 	struct rds_ib_connection *ic = NULL;
@@ -684,6 +702,7 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 
 	rds_ib_set_protocol(conn, version);
 	rds_ib_set_flow_control(conn, be32_to_cpu(dp->dp_credit));
+	ic->i_frag_sz = rds_ib_set_frag_size(RDS_FRAG_SIZE, dev);
 
 	/* If the peer gave us the last packet it saw, process this as if
 	 * we had received a regular ACK. */
@@ -727,6 +746,7 @@ int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id)
 {
 	struct rds_connection *conn = cm_id->context;
 	struct rds_ib_connection *ic = conn->c_transport_data;
+	struct ib_device *dev = cm_id->device;
 	struct rdma_conn_param conn_param;
 	struct rds_ib_connect_private dp;
 	int ret;
@@ -735,6 +755,7 @@ int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id)
 	 * default to RDSv3.0 */
 	rds_ib_set_protocol(conn, RDS_PROTOCOL_3_0);
 	ic->i_flowctl = rds_ib_sysctl_flow_control;	/* advertise flow control */
+	ic->i_frag_sz = rds_ib_set_frag_size(RDS_FRAG_SIZE, dev);
 
 	ret = rds_ib_setup_qp(conn);
 	if (ret) {
@@ -757,6 +778,7 @@ out:
 			ret = 0;
 	}
 	ic->i_active_side = true;
+
 	return ret;
 }
 

@@ -46,8 +46,11 @@ static atomic_t	rds_ib_allocation = ATOMIC_INIT(0);
 
 void rds_ib_recv_init_ring(struct rds_ib_connection *ic)
 {
+	/* The plus one is for the RDS header */
+	u32 num_sge = ceil(ic->i_frag_sz, PAGE_SIZE) + 1;
 	struct rds_ib_recv_work *recv;
 	u32 i;
+	u32 j;
 
 	for (i = 0, recv = ic->i_recvs; i < ic->i_recv_ring.w_nr; i++, recv++) {
 		struct ib_sge *sge;
@@ -58,17 +61,19 @@ void rds_ib_recv_init_ring(struct rds_ib_connection *ic)
 		recv->r_wr.next = NULL;
 		recv->r_wr.wr_id = i;
 		recv->r_wr.sg_list = recv->r_sge;
-		recv->r_wr.num_sge = RDS_IB_RECV_SGE;
+		recv->r_wr.num_sge = num_sge;
 
-		sge = &recv->r_sge[0];
+		sge = recv->r_sge;
 		sge->addr = ic->i_recv_hdrs_dma + (i * sizeof(struct rds_header));
 		sge->length = sizeof(struct rds_header);
 		sge->lkey = ic->i_pd->local_dma_lkey;
 
-		sge = &recv->r_sge[1];
-		sge->addr = 0;
-		sge->length = ic->i_frag_sz;
-		sge->lkey = ic->i_pd->local_dma_lkey;
+		for (j = 1; j <= num_sge; j++) {
+			sge = recv->r_sge + j;
+			sge->addr = 0;
+			sge->length = PAGE_SIZE;
+			sge->lkey = ic->i_pd->local_dma_lkey;
+		}
 	}
 }
 
@@ -159,6 +164,8 @@ void rds_ib_recv_free_caches(struct rds_ib_connection *ic)
 	struct rds_page_frag *frag;
 	struct rds_page_frag *frag_tmp;
 	LIST_HEAD(list);
+	struct scatterlist *s;
+	int i;
 
 	rds_ib_cache_xfer_to_ready(&ic->i_cache_incs);
 	rds_ib_cache_splice_all_lists(&ic->i_cache_incs, &list);
@@ -177,8 +184,14 @@ void rds_ib_recv_free_caches(struct rds_ib_connection *ic)
 	list_for_each_entry_safe(frag, frag_tmp, &list, f_cache_entry) {
 		list_del(&frag->f_cache_entry);
 		WARN_ON(!list_empty(&frag->f_item));
+
+		/* Detach and free frags */
 		list_del_init(&frag->f_item);
-		__free_page(sg_page(&frag->f_sg));
+		for_each_sg(frag->f_sg, s, ic->i_frag_sz / PAGE_SIZE, i) {
+			rdsdebug("RDS/IB: frag %p page %p\n", frag, sg_page(s));
+			__free_page(sg_page(s));
+		}
+
 		atomic_sub(ic->i_frag_sz / PAGE_SIZE, &rds_ib_allocation);
 		kmem_cache_free(rds_ib_frag_slab, frag);
 		atomic_sub(ic->i_frag_sz / SZ_1K, &ic->i_cache_allocs);
@@ -220,7 +233,11 @@ static struct list_head *rds_ib_recv_cache_get(struct rds_ib_refill_cache *cache
 static void rds_ib_frag_free(struct rds_ib_connection *ic,
 			     struct rds_page_frag *frag)
 {
-	rdsdebug("frag %p page %p\n", frag, sg_page(&frag->f_sg));
+	int i = 0;
+	struct scatterlist *sg;
+
+	for_each_sg(frag->f_sg, sg, ic->i_frag_sz / PAGE_SIZE, i)
+		rdsdebug("frag %p page %p\n", frag, sg_page(sg));
 
 	rds_ib_recv_cache_put(&frag->f_cache_entry, &ic->i_cache_frags);
 	atomic_add(ic->i_frag_sz / SZ_1K, &ic->i_cache_allocs);
@@ -256,7 +273,9 @@ static void rds_ib_recv_clear_one(struct rds_ib_connection *ic,
 		recv->r_ibinc = NULL;
 	}
 	if (recv->r_frag) {
-		ib_dma_unmap_sg(ic->i_cm_id->device, &recv->r_frag->f_sg, 1, DMA_FROM_DEVICE);
+		ib_dma_unmap_sg(ic->i_cm_id->device, recv->r_frag->f_sg,
+				ic->i_frag_sz / PAGE_SIZE,
+				DMA_FROM_DEVICE);
 		rds_ib_frag_free(ic, recv->r_frag);
 		recv->r_frag = NULL;
 	}
@@ -303,9 +322,14 @@ static struct rds_ib_incoming *rds_ib_refill_one_inc(struct rds_ib_connection *i
 static struct rds_page_frag *rds_ib_refill_one_frag(struct rds_ib_connection *ic,
 						    gfp_t slab_mask, gfp_t page_mask)
 {
+	int nent = ic->i_frag_sz / PAGE_SIZE;
 	struct rds_page_frag *frag;
 	struct list_head *cache_item;
+	struct scatterlist *sg;
+	struct scatterlist *s;
 	int ret;
+	int i;
+	int j;
 
 	cache_item = rds_ib_recv_cache_get(&ic->i_cache_frags);
 	if (cache_item) {
@@ -317,12 +341,17 @@ static struct rds_page_frag *rds_ib_refill_one_frag(struct rds_ib_connection *ic
 		if (!frag)
 			return NULL;
 
-		sg_init_table(&frag->f_sg, 1);
-		ret = rds_page_remainder_alloc(&frag->f_sg,
-					       ic->i_frag_sz, page_mask);
-		if (ret) {
-			kmem_cache_free(rds_ib_frag_slab, frag);
-			return NULL;
+		sg_init_table(frag->f_sg, nent);
+		for_each_sg(frag->f_sg, sg, nent, i) {
+			ret = rds_page_remainder_alloc(sg,
+						       PAGE_SIZE, page_mask);
+			if (ret) {
+				for_each_sg(frag->f_sg, s, nent, j)
+					__free_pages(sg_page(s),
+						     get_order(s->length));
+				kmem_cache_free(rds_ib_frag_slab, frag);
+				return NULL;
+			}
 		}
 		rds_ib_stats_inc(s_ib_rx_total_frags);
 	}
@@ -336,10 +365,13 @@ static int rds_ib_recv_refill_one(struct rds_connection *conn,
 				  struct rds_ib_recv_work *recv, gfp_t gfp)
 {
 	struct rds_ib_connection *ic = conn->c_transport_data;
+	int nent = ic->i_frag_sz / PAGE_SIZE;
 	struct ib_sge *sge;
+	struct scatterlist *sg;
 	int ret = -ENOMEM;
 	gfp_t slab_mask = GFP_NOWAIT;
 	gfp_t page_mask = GFP_NOWAIT;
+	int i;
 
 	if (gfp & __GFP_DIRECT_RECLAIM) {
 		slab_mask = GFP_KERNEL;
@@ -366,18 +398,18 @@ static int rds_ib_recv_refill_one(struct rds_connection *conn,
 	if (!recv->r_frag)
 		goto out;
 
-	ret = ib_dma_map_sg(ic->i_cm_id->device, &recv->r_frag->f_sg,
-			    1, DMA_FROM_DEVICE);
-	WARN_ON(ret != 1);
+	ret = ib_dma_map_sg(ic->i_cm_id->device, recv->r_frag->f_sg,
+			    nent, DMA_FROM_DEVICE);
 
-	sge = &recv->r_sge[0];
+	sge = recv->r_sge;
 	sge->addr = ic->i_recv_hdrs_dma + (recv - ic->i_recvs) * sizeof(struct rds_header);
 	sge->length = sizeof(struct rds_header);
 
-	sge = &recv->r_sge[1];
-	sge->addr = ib_sg_dma_address(ic->i_cm_id->device, &recv->r_frag->f_sg);
-	sge->length = ib_sg_dma_len(ic->i_cm_id->device, &recv->r_frag->f_sg);
-
+	for_each_sg(recv->r_frag->f_sg, sg, nent, i) {
+		sge = recv->r_sge + i + 1;
+		sge->addr = ib_sg_dma_address(ic->i_cm_id->device, sg);
+		sge->length = ib_sg_dma_len(ic->i_cm_id->device, sg);
+	}
 	ret = 0;
 out:
 	return ret;
@@ -414,7 +446,9 @@ void rds_ib_recv_refill(struct rds_connection *conn, int prefill, gfp_t gfp)
 	struct rds_ib_recv_work *recv;
 	struct ib_recv_wr *failed_wr;
 	unsigned int posted = 0;
+	struct scatterlist *sg;
 	int ret = 0;
+	int i = 0;
 	bool can_wait = !!(gfp & __GFP_DIRECT_RECLAIM);
 	u32 pos;
 
@@ -439,11 +473,13 @@ void rds_ib_recv_refill(struct rds_connection *conn, int prefill, gfp_t gfp)
 			break;
 		}
 
-		rdsdebug("recv %p ibinc %p page %p addr %lu\n", recv,
-			 recv->r_ibinc, sg_page(&recv->r_frag->f_sg),
-			 (long) ib_sg_dma_address(
-				ic->i_cm_id->device,
-				&recv->r_frag->f_sg));
+		for_each_sg(recv->r_frag->f_sg, sg,
+			    (ic->i_frag_sz / PAGE_SIZE), i)
+			rdsdebug("recv %p ibinc %p page %p addr %lu ret %d\n",
+				 recv, recv->r_ibinc, sg_page(sg),
+				 (long)ib_sg_dma_address(ic->i_cm_id->device,
+							 sg),
+				 ret);
 
 		/* XXX when can this fail? */
 		ret = ib_post_recv(ic->i_cm_id->qp, &recv->r_wr, &failed_wr);
@@ -557,6 +593,7 @@ int rds_ib_inc_copy_to_user(struct rds_incoming *inc, struct iov_iter *to)
 	struct rds_ib_connection *ic = inc->i_conn->c_transport_data;
 	struct rds_ib_incoming *ibinc;
 	struct rds_page_frag *frag;
+	struct scatterlist *sg;
 	unsigned long to_copy;
 	unsigned long frag_off = 0;
 	int copied = 0;
@@ -566,21 +603,17 @@ int rds_ib_inc_copy_to_user(struct rds_incoming *inc, struct iov_iter *to)
 	ibinc = container_of(inc, struct rds_ib_incoming, ii_inc);
 	frag = list_entry(ibinc->ii_frags.next, struct rds_page_frag, f_item);
 	len = be32_to_cpu(inc->i_hdr.h_len);
+	sg = frag->f_sg;
 
 	while (iov_iter_count(to) && copied < len) {
-		if (frag_off == ic->i_frag_sz) {
-			frag = list_entry(frag->f_item.next,
-					  struct rds_page_frag, f_item);
-			frag_off = 0;
-		}
 		to_copy = min_t(unsigned long, iov_iter_count(to),
-				ic->i_frag_sz - frag_off);
+				sg->length - frag_off);
 		to_copy = min_t(unsigned long, to_copy, len - copied);
 
 		/* XXX needs + offset for multiple recvs per page */
 		rds_stats_add(s_copy_to_user, to_copy);
-		ret = copy_page_to_iter(sg_page(&frag->f_sg),
-					frag->f_sg.offset + frag_off,
+		ret = copy_page_to_iter(sg_page(sg),
+					sg->offset + frag_off,
 					to_copy,
 					to);
 		if (ret != to_copy)
@@ -588,6 +621,18 @@ int rds_ib_inc_copy_to_user(struct rds_incoming *inc, struct iov_iter *to)
 
 		frag_off += to_copy;
 		copied += to_copy;
+
+		if (frag_off == sg->length) {
+			frag_off = 0;
+			sg = sg_next(sg);
+		}
+
+		if (copied % ic->i_frag_sz == 0) {
+			frag = list_entry(frag->f_item.next,
+					  struct rds_page_frag, f_item);
+			frag_off = 0;
+			sg = frag->f_sg;
+		}
 	}
 
 	return copied;
@@ -806,6 +851,7 @@ static void rds_ib_cong_recv(struct rds_connection *conn,
 	unsigned int map_off;
 	unsigned int map_page;
 	struct rds_page_frag *frag;
+	struct scatterlist *sg;
 	unsigned long frag_off;
 	unsigned long to_copy;
 	unsigned long copied;
@@ -824,6 +870,7 @@ static void rds_ib_cong_recv(struct rds_connection *conn,
 	frag_off = 0;
 
 	copied = 0;
+	sg = frag->f_sg;
 
 	while (copied < RDS_CONG_MAP_BYTES) {
 		uint64_t *src, *dst;
@@ -831,11 +878,13 @@ static void rds_ib_cong_recv(struct rds_connection *conn,
 
 		to_copy = min(ic->i_frag_sz - frag_off,
 			      RDS_CONG_PAGE_SIZE - map_off);
+		to_copy = min(sg->length - frag_off,
+			      RDS_CONG_PAGE_SIZE - map_off);
 		BUG_ON(to_copy & 7); /* Must be 64bit aligned. */
 
-		addr = kmap_atomic(sg_page(&frag->f_sg));
+		addr = kmap_atomic(sg_page(sg));
 
-		src = addr + frag->f_sg.offset + frag_off;
+		src = addr + sg->offset + frag_off;
 		dst = (void *)map->m_page_addrs[map_page] + map_off;
 		for (k = 0; k < to_copy; k += 8) {
 			/* Record ports that became uncongested, ie
@@ -854,10 +903,17 @@ static void rds_ib_cong_recv(struct rds_connection *conn,
 		}
 
 		frag_off += to_copy;
-		if (frag_off == ic->i_frag_sz) {
+
+		if (frag_off == sg->length) {
+			frag_off = 0;
+			sg = sg_next(sg);
+		}
+
+		if (copied % ic->i_frag_sz == 0) {
 			frag = list_entry(frag->f_item.next,
 					  struct rds_page_frag, f_item);
 			frag_off = 0;
+			sg = frag->f_sg;
 		}
 	}
 
@@ -1010,8 +1066,8 @@ void rds_ib_recv_cqe_handler(struct rds_ib_connection *ic,
 
 	rds_ib_stats_inc(s_ib_rx_cq_event);
 	recv = &ic->i_recvs[rds_ib_ring_oldest(&ic->i_recv_ring)];
-	ib_dma_unmap_sg(ic->i_cm_id->device, &recv->r_frag->f_sg, 1,
-			DMA_FROM_DEVICE);
+	ib_dma_unmap_sg(ic->i_cm_id->device, recv->r_frag->f_sg,
+			ic->i_frag_sz / PAGE_SIZE, DMA_FROM_DEVICE);
 
 	/* Also process recvs in connecting state because it is possible
 	 * to get a recv completion _before_ the rdmacm ESTABLISHED

@@ -49,7 +49,7 @@ void rdsdebug(char *fmt, ...)
 #define ceil(x, y) \
 	({ unsigned long __x = (x), __y = (y); (__x + __y - 1) / __y; })
 
-#define RDS_FRAG_SHIFT	12
+#define RDS_FRAG_SHIFT	14
 #define RDS_FRAG_SIZE	((unsigned int)(1 << RDS_FRAG_SHIFT))
 
 /* Used to limit both RDMA and non-RDMA RDS message to 1MB */
