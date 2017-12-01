@@ -26,7 +26,7 @@
 
 #define RDS_IB_WC_MAX			32
 
-#define NUM_RDS_RECV_SG			(PAGE_ALIGN(RDS_FRAG_SIZE) / PAGE_SIZE)
+#define NUM_RDS_RECV_SG			(PAGE_ALIGN(RDS_MAX_FRAG_SIZE) / PAGE_SIZE)
 
 extern struct rw_semaphore rds_ib_devices_lock;
 extern struct list_head rds_ib_devices;
@@ -66,7 +66,8 @@ struct rds_ib_connect_private {
 	u8			dp_protocol_major;
 	u8			dp_protocol_minor;
 	__be16			dp_protocol_minor_mask; /* bitmask */
-	__be32			dp_reserved1;
+	__be16			dp_reserved1;
+	__be16			dp_frag_sz;
 	__be64			dp_ack_seq;
 	__be32			dp_credit;		/* non-zero enables flow ctl */
 };
@@ -185,7 +186,7 @@ struct rds_ib_connection {
 	u16			i_frag_sz;	/* IB fragment size */
 	u16			i_frag_cache_sz;
 	u8			i_frag_pages;
-
+	u8			i_hca_sge;
 	/* Batched completions */
 	unsigned int		i_unsignaled_wrs;
 
@@ -362,7 +363,7 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id);
 void rds_ib_cm_connect_complete(struct rds_connection *conn,
 				struct rdma_cm_event *event);
-
+void rds_ib_init_frag(unsigned int version);
 
 #define rds_ib_conn_error(conn, fmt...) \
 	__rds_ib_conn_error(conn, KERN_WARNING "RDS/IB: " fmt)

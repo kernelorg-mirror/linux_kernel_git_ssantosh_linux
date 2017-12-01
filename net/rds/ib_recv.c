@@ -47,7 +47,7 @@ static atomic_t	rds_ib_allocation = ATOMIC_INIT(0);
 void rds_ib_recv_init_ring(struct rds_ib_connection *ic)
 {
 	/* The plus one is for the RDS header */
-	u32 num_sge = ceil(ic->i_frag_sz, PAGE_SIZE) + 1;
+	u32 num_sge = ic->i_frag_pages + 1;
 	struct rds_ib_recv_work *recv;
 	u32 i;
 	u32 j;
@@ -236,7 +236,7 @@ static void rds_ib_frag_free(struct rds_ib_connection *ic,
 	int i = 0;
 	struct scatterlist *sg;
 
-	for_each_sg(frag->f_sg, sg, ic->i_frag_sz / PAGE_SIZE, i)
+	for_each_sg(frag->f_sg, sg, ic->i_frag_pages, i)
 		rdsdebug("frag %p page %p\n", frag, sg_page(sg));
 
 	rds_ib_recv_cache_put(&frag->f_cache_entry, &ic->i_cache_frags);
@@ -274,8 +274,7 @@ static void rds_ib_recv_clear_one(struct rds_ib_connection *ic,
 	}
 	if (recv->r_frag) {
 		ib_dma_unmap_sg(ic->i_cm_id->device, recv->r_frag->f_sg,
-				ic->i_frag_sz / PAGE_SIZE,
-				DMA_FROM_DEVICE);
+				ic->i_frag_pages, DMA_FROM_DEVICE);
 		rds_ib_frag_free(ic, recv->r_frag);
 		recv->r_frag = NULL;
 	}
@@ -322,7 +321,7 @@ static struct rds_ib_incoming *rds_ib_refill_one_inc(struct rds_ib_connection *i
 static struct rds_page_frag *rds_ib_refill_one_frag(struct rds_ib_connection *ic,
 						    gfp_t slab_mask, gfp_t page_mask)
 {
-	int nent = ic->i_frag_sz / PAGE_SIZE;
+	int nent = ic->i_frag_pages;
 	struct rds_page_frag *frag;
 	struct list_head *cache_item;
 	struct scatterlist *sg;
@@ -365,7 +364,7 @@ static int rds_ib_recv_refill_one(struct rds_connection *conn,
 				  struct rds_ib_recv_work *recv, gfp_t gfp)
 {
 	struct rds_ib_connection *ic = conn->c_transport_data;
-	int nent = ic->i_frag_sz / PAGE_SIZE;
+	int nent = ic->i_frag_pages;
 	struct ib_sge *sge;
 	struct scatterlist *sg;
 	int ret = -ENOMEM;
@@ -473,8 +472,7 @@ void rds_ib_recv_refill(struct rds_connection *conn, int prefill, gfp_t gfp)
 			break;
 		}
 
-		for_each_sg(recv->r_frag->f_sg, sg,
-			    (ic->i_frag_sz / PAGE_SIZE), i)
+		for_each_sg(recv->r_frag->f_sg, sg, ic->i_frag_pages, i)
 			rdsdebug("recv %p ibinc %p page %p addr %lu ret %d\n",
 				 recv, recv->r_ibinc, sg_page(sg),
 				 (long)ib_sg_dma_address(ic->i_cm_id->device,
@@ -1067,7 +1065,7 @@ void rds_ib_recv_cqe_handler(struct rds_ib_connection *ic,
 	rds_ib_stats_inc(s_ib_rx_cq_event);
 	recv = &ic->i_recvs[rds_ib_ring_oldest(&ic->i_recv_ring)];
 	ib_dma_unmap_sg(ic->i_cm_id->device, recv->r_frag->f_sg,
-			ic->i_frag_sz / PAGE_SIZE, DMA_FROM_DEVICE);
+			ic->i_frag_pages, DMA_FROM_DEVICE);
 
 	/* Also process recvs in connecting state because it is possible
 	 * to get a recv completion _before_ the rdmacm ESTABLISHED

@@ -143,6 +143,7 @@ static void rds_ib_add_one(struct ib_device *device)
 
 	rds_ibdev->max_wrs = device->attrs.max_qp_wr;
 	rds_ibdev->max_sge = min(device->attrs.max_sge, RDS_IB_MAX_SGE);
+	WARN_ON(rds_ibdev->max_sge < 2);
 
 	has_fr = (device->attrs.device_cap_flags &
 		  IB_DEVICE_MEM_MGT_EXTENSIONS);
@@ -431,6 +432,9 @@ int rds_ib_init(void)
 	ret = rds_ib_mr_init();
 	if (ret)
 		goto out;
+
+	/* Initialise the RDS IB fragment size */
+	rds_ib_init_frag(RDS_PROTOCOL_VERSION);
 
 	ret = ib_register_client(&rds_ib_client);
 	if (ret)

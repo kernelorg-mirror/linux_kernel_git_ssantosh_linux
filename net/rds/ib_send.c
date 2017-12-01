@@ -196,9 +196,7 @@ void rds_ib_send_init_ring(struct rds_ib_connection *ic)
 	struct rds_ib_send_work *send;
 	u32 i;
 	u32 j;
-	u32 num_sge = min_t(u32,
-			    ceil(RDS_FRAG_SIZE, PAGE_SIZE),
-			    RDS_IB_MAX_SGE);
+	u32 num_sge = ic->i_frag_pages;
 
 	for (i = 0, send = ic->i_sends; i < ic->i_send_ring.w_nr; i++, send++) {
 		struct ib_sge *sge;
@@ -511,7 +509,6 @@ int rds_ib_xmit(struct rds_connection *conn, struct rds_message *rm,
 	int ret;
 	int flow_controlled = 0;
 	int nr_sig = 0;
-	unsigned int sge_ceil = ceil((unsigned int)ic->i_frag_sz, PAGE_SIZE);
 
 	BUG_ON(hdr_off != 0 && hdr_off != sizeof(struct rds_header));
 
@@ -653,7 +650,8 @@ int rds_ib_xmit(struct rds_connection *conn, struct rds_message *rm,
 		    && scat != &rm->data.op_sg[rm->data.op_count]) {
 			unsigned int j = 1;
 			unsigned int num_sge = min_t(unsigned long,
-						     remaining_sge, sge_ceil);
+						     remaining_sge,
+						     ic->i_frag_pages);
 
 			send->s_wr.num_sge += num_sge;
 			while (j <= num_sge) {

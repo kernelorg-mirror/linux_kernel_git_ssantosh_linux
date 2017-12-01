@@ -34,11 +34,15 @@
 #include <linux/in.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/sizes.h>
 #include <linux/ratelimit.h>
 
 #include "rds_single_path.h"
 #include "rds.h"
 #include "ib.h"
+
+static unsigned int rds_ib_max_frag = RDS_FRAG_SIZE;
+static unsigned int ib_init_frag_size = RDS_FRAG_SIZE;
 
 /*
  * Set the selected protocol version
@@ -62,23 +66,6 @@ static void rds_ib_set_flow_control(struct rds_connection *conn, u32 credits)
 	} else {
 		ic->i_flowctl = 0;
 	}
-}
-
-static u16 rds_ib_set_frag_size(u16 frag, struct ib_device *dev)
-{
-	struct rds_ib_device *rds_ibdev;
-	u16 frag_sz = PAGE_SIZE;
-
-	rds_ibdev = rds_ib_get_client_data(dev);
-	if (!rds_ibdev) {
-		pr_debug("rds_ibdev is NULL\n");
-		goto rds_ibdev_out;
-	}
-	frag_sz = min_t(u16, frag, rds_ibdev->max_sge * PAGE_SIZE);
-
-rds_ibdev_out:
-	rds_ib_dev_put(rds_ibdev);
-	return frag_sz;
 }
 
 /*
@@ -106,6 +93,74 @@ rds_ib_tune_rnr(struct rds_ib_connection *ic, struct ib_qp_attr *attr)
 		printk(KERN_NOTICE "ib_modify_qp(IB_QP_MIN_RNR_TIMER): err=%d\n", -ret);
 }
 
+static inline u16 rds_ib_get_frag(unsigned int version, u16 ib_frag)
+{
+	u16 frag = RDS_FRAG_SIZE;
+
+	if (version < RDS_PROTOCOL_3_1) {
+		pr_err("RDS/IB: Protocol %x default frag %uKB\n",
+		       version, frag / SZ_1K);
+		return frag;
+	}
+
+	switch (ib_frag) {
+	case RDS_MAX_FRAG_SIZE:
+		frag = RDS_MAX_FRAG_SIZE;
+		break;
+	case SZ_8K:
+		frag = SZ_8K;
+		break;
+	default:
+		frag = RDS_FRAG_SIZE;
+	}
+
+	return frag;
+}
+
+/* Initialise the RDS IB frag size with host_ib_max_frag */
+void rds_ib_init_frag(unsigned int version)
+{
+	/* Initialise fragment size */
+	ib_init_frag_size = rds_ib_get_frag(version, rds_ib_max_frag);
+
+	pr_debug("RDS/IB: fragment size initialised to %uKB\n",
+		 ib_init_frag_size / SZ_1K);
+}
+
+/* Update the RDS IB frag size */
+static u16 rds_ib_set_frag_size(struct rds_connection *conn, u16 dp_frag)
+{
+	struct rds_ib_connection *ic = conn->c_transport_data;
+	u16 current_frag = ic->i_frag_sz;
+	u16 frag;
+
+	frag = min_t(unsigned int, ib_init_frag_size,
+		     PAGE_ALIGN((ic->i_hca_sge - 1) * PAGE_SIZE));
+
+	if (frag != dp_frag) {
+		frag = min_t(unsigned int, dp_frag, frag);
+		ic->i_frag_sz = rds_ib_get_frag(conn->c_version, frag);
+	} else {
+		ic->i_frag_sz = frag;
+	}
+
+	ic->i_frag_pages =  ceil(ic->i_frag_sz, PAGE_SIZE);
+	pr_debug("RDS/IB: conn <%pI4, %pI4>, Frags <init,ic,dp>: {%d,%d,%d}, updated {%d -> %d}\n",
+		 &conn->c_laddr, &conn->c_faddr,
+		 ib_init_frag_size / SZ_1K,
+		 ic->i_frag_sz / SZ_1K, dp_frag /  SZ_1K,
+		 current_frag / SZ_1K, ic->i_frag_sz / SZ_1K);
+
+	return ic->i_frag_sz;
+}
+
+/* Init per IC frag size */
+static inline void rds_ib_init_ic_frag(struct rds_ib_connection *ic)
+{
+	if (ic)
+		ic->i_frag_sz = ib_init_frag_size;
+}
+
 /*
  * Connection established.
  * We get here for both outgoing and incoming connection.
@@ -126,6 +181,7 @@ void rds_ib_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
 				RDS_PROTOCOL(dp->dp_protocol_major,
 				dp->dp_protocol_minor));
 			rds_ib_set_flow_control(conn, be32_to_cpu(dp->dp_credit));
+			rds_ib_set_frag_size(conn, be16_to_cpu(dp->dp_frag_sz));
 		}
 	}
 
@@ -137,8 +193,9 @@ void rds_ib_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
 		rds_conn_destroy(conn);
 		return;
 	} else {
-		pr_notice("RDS/IB: %s conn connected <%pI4,%pI4> version %u.%u%s\n",
+		pr_notice("RDS/IB: %s conn, frag %dKB, connected <%pI4,%pI4> version %u.%u%s\n",
 			  ic->i_active_side ? "Active" : "Passive",
+			  ic->i_frag_sz / SZ_1K,
 			  &conn->c_laddr, &conn->c_faddr,
 			  RDS_PROTOCOL_MAJOR(conn->c_version),
 			  RDS_PROTOCOL_MINOR(conn->c_version),
@@ -194,7 +251,7 @@ static void rds_ib_cm_fill_conn_param(struct rds_connection *conn,
 			struct rds_ib_connect_private *dp,
 			u32 protocol_version,
 			u32 max_responder_resources,
-			u32 max_initiator_depth)
+			u32 max_initiator_depth, u16 frag)
 {
 	struct rds_ib_connection *ic = conn->c_transport_data;
 	struct rds_ib_device *rds_ibdev = ic->rds_ibdev;
@@ -226,6 +283,7 @@ static void rds_ib_cm_fill_conn_param(struct rds_connection *conn,
 			atomic_sub(IB_SET_POST_CREDITS(credits), &ic->i_credits);
 		}
 
+		dp->dp_frag_sz = cpu_to_be16(frag);
 		conn_param->private_data = dp;
 		conn_param->private_data_len = sizeof(*dp);
 	}
@@ -513,6 +571,7 @@ static int rds_ib_setup_qp(struct rds_connection *conn)
 	atomic_set(&ic->i_fastreg_wrs, RDS_IB_DEFAULT_FR_WR);
 	atomic_set(&ic->i_fastunreg_wrs, RDS_IB_DEFAULT_FR_INV_WR);
 
+	ic->i_hca_sge = rds_ibdev->max_sge;
 	/*
 	 * XXX this can fail if max_*_wr is too large?  Are we supposed
 	 * to back off until we get a value that the hardware can support?
@@ -649,13 +708,13 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 	__be64 lguid = cm_id->route.path_rec->sgid.global.interface_id;
 	__be64 fguid = cm_id->route.path_rec->dgid.global.interface_id;
 	const struct rds_ib_connect_private *dp = event->param.conn.private_data;
-	struct ib_device *dev = cm_id->device;
 	struct rds_ib_connect_private dp_rep;
 	struct rds_connection *conn = NULL;
 	struct rds_ib_connection *ic = NULL;
 	struct rdma_conn_param conn_param;
 	u32 version;
 	int err = 1, destroy = 1;
+	u16 frag;
 
 	/* Check whether the remote protocol version matches ours. */
 	version = rds_ib_protocol_compatible(event);
@@ -676,6 +735,8 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 		conn = NULL;
 		goto out;
 	}
+
+	rds_ib_set_protocol(conn, version);
 
 	/*
 	 * The connection request may occur while the
@@ -702,7 +763,6 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 
 	rds_ib_set_protocol(conn, version);
 	rds_ib_set_flow_control(conn, be32_to_cpu(dp->dp_credit));
-	ic->i_frag_sz = rds_ib_set_frag_size(RDS_FRAG_SIZE, dev);
 
 	/* If the peer gave us the last packet it saw, process this as if
 	 * we had received a regular ACK. */
@@ -724,10 +784,12 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 		rds_ib_conn_error(conn, "rds_ib_setup_qp failed (%d)\n", err);
 		goto out;
 	}
+	frag = rds_ib_set_frag_size(conn, be16_to_cpu(dp->dp_frag_sz));
 
 	rds_ib_cm_fill_conn_param(conn, &conn_param, &dp_rep, version,
 		event->param.conn.responder_resources,
-		event->param.conn.initiator_depth);
+		event->param.conn.initiator_depth,
+		frag);
 
 	/* rdma_accept() calls rdma_reject() internally if it fails */
 	if (rdma_accept(cm_id, &conn_param))
@@ -746,25 +808,28 @@ int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id)
 {
 	struct rds_connection *conn = cm_id->context;
 	struct rds_ib_connection *ic = conn->c_transport_data;
-	struct ib_device *dev = cm_id->device;
 	struct rdma_conn_param conn_param;
 	struct rds_ib_connect_private dp;
+	u16 frag;
 	int ret;
 
 	/* If the peer doesn't do protocol negotiation, we must
 	 * default to RDSv3.0 */
 	rds_ib_set_protocol(conn, RDS_PROTOCOL_3_0);
 	ic->i_flowctl = rds_ib_sysctl_flow_control;	/* advertise flow control */
-	ic->i_frag_sz = rds_ib_set_frag_size(RDS_FRAG_SIZE, dev);
+
+	pr_debug("RDS/IB: Initiate conn <%pI4, %pI4> with Frags <init,ic>: {%d,%d}\n",
+		 &conn->c_laddr, &conn->c_faddr,
+		 ib_init_frag_size / SZ_1K, ic->i_frag_sz / SZ_1K);
 
 	ret = rds_ib_setup_qp(conn);
 	if (ret) {
 		rds_ib_conn_error(conn, "rds_ib_setup_qp failed (%d)\n", ret);
 		goto out;
 	}
-
+	frag = rds_ib_set_frag_size(conn, ib_init_frag_size);
 	rds_ib_cm_fill_conn_param(conn, &conn_param, &dp, RDS_PROTOCOL_VERSION,
-		UINT_MAX, UINT_MAX);
+		UINT_MAX, UINT_MAX, frag);
 	ret = rdma_connect(cm_id, &conn_param);
 	if (ret)
 		rds_ib_conn_error(conn, "rdma_connect failed (%d)\n", ret);
@@ -952,6 +1017,7 @@ void rds_ib_conn_path_shutdown(struct rds_conn_path *cp)
 
 	rds_ib_ring_init(&ic->i_send_ring, rds_ib_sysctl_max_send_wr);
 	rds_ib_ring_init(&ic->i_recv_ring, rds_ib_sysctl_max_recv_wr);
+	rds_ib_init_ic_frag(ic);
 
 	if (ic->i_ibinc) {
 		rds_inc_put(&ic->i_ibinc->ii_inc);
@@ -1000,6 +1066,7 @@ int rds_ib_conn_alloc(struct rds_connection *conn, gfp_t gfp)
 	 */
 	rds_ib_ring_init(&ic->i_send_ring, rds_ib_sysctl_max_send_wr);
 	rds_ib_ring_init(&ic->i_recv_ring, rds_ib_sysctl_max_recv_wr);
+	rds_ib_init_ic_frag(ic);
 
 	ic->conn = conn;
 	conn->c_transport_data = ic;
