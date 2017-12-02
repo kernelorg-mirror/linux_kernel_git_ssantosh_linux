@@ -232,6 +232,8 @@ struct rds_ib_device {
 	refcount_t		refcount;
 	struct work_struct	free_work;
 	int			*vector_load;
+	/* Protect vector_load concurrent access */
+	struct mutex		vector_load_lock;
 };
 
 #define ibdev_to_node(ibdev) dev_to_node((ibdev)->dev.parent)

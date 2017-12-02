@@ -370,9 +370,13 @@ static void rds_ib_cq_comp_handler_send(struct ib_cq *cq, void *context)
 
 static inline int ibdev_get_unused_vector(struct rds_ib_device *rds_ibdev)
 {
-	int min = rds_ibdev->vector_load[rds_ibdev->dev->num_comp_vectors - 1];
-	int index = rds_ibdev->dev->num_comp_vectors - 1;
+	int index;
+	int min;
 	int i;
+
+	mutex_lock(&rds_ibdev->vector_load_lock);
+	min = rds_ibdev->vector_load[rds_ibdev->dev->num_comp_vectors - 1];
+	index = rds_ibdev->dev->num_comp_vectors - 1;
 
 	for (i = rds_ibdev->dev->num_comp_vectors - 1; i >= 0; i--) {
 		if (rds_ibdev->vector_load[i] < min) {
@@ -382,12 +386,16 @@ static inline int ibdev_get_unused_vector(struct rds_ib_device *rds_ibdev)
 	}
 
 	rds_ibdev->vector_load[index]++;
+	mutex_unlock(&rds_ibdev->vector_load_lock);
+
 	return index;
 }
 
 static inline void ibdev_put_vector(struct rds_ib_device *rds_ibdev, int index)
 {
+	mutex_lock(&rds_ibdev->vector_load_lock);
 	rds_ibdev->vector_load[index]--;
+	mutex_unlock(&rds_ibdev->vector_load_lock);
 }
 
 /*

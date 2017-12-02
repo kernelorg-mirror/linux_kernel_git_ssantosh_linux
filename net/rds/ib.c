@@ -191,6 +191,11 @@ static void rds_ib_add_one(struct ib_device *device)
 		goto put_dev;
 	}
 
+	/* Several TOS connections may invoke ibdev_get_unused_vector()
+	 * concurrently, hence we need protection for vector_load
+	 */
+	mutex_init(&rds_ibdev->vector_load_lock);
+
 	rdsdebug("RDS/IB: max_mr = %d, max_wrs = %d, max_sge = %d, fmr_max_remaps = %d, max_1m_mrs = %d, max_8k_mrs = %d\n",
 		 device->attrs.max_fmr, rds_ibdev->max_wrs, rds_ibdev->max_sge,
 		 rds_ibdev->fmr_max_remaps, rds_ibdev->max_1m_mrs,
