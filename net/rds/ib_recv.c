@@ -192,7 +192,7 @@ void rds_ib_recv_free_caches(struct rds_ib_connection *ic)
 			__free_page(sg_page(s));
 		}
 
-		atomic_sub(ic->i_frag_sz / PAGE_SIZE, &rds_ib_allocation);
+		atomic_sub(ic->i_frag_pages, &rds_ib_allocation);
 		kmem_cache_free(rds_ib_frag_slab, frag);
 		atomic_sub(ic->i_frag_sz / SZ_1K, &ic->i_cache_allocs);
 		rds_ib_stats_add(s_ib_recv_removed_from_cache, ic->i_frag_sz);
@@ -300,14 +300,15 @@ static struct rds_ib_incoming *rds_ib_refill_one_inc(struct rds_ib_connection *i
 		ibinc = container_of(cache_item, struct rds_ib_incoming, ii_cache_entry);
 	} else {
 		avail_allocs = atomic_add_unless(&rds_ib_allocation,
-						 1, rds_ib_sysctl_max_recv_allocation);
+						 ic->i_frag_pages,
+						 rds_ib_sysctl_max_recv_allocation);
 		if (!avail_allocs) {
 			rds_ib_stats_inc(s_ib_rx_alloc_limit);
 			return NULL;
 		}
 		ibinc = kmem_cache_alloc(rds_ib_incoming_slab, slab_mask);
 		if (!ibinc) {
-			atomic_dec(&rds_ib_allocation);
+			atomic_sub(ic->i_frag_pages, &rds_ib_allocation);
 			return NULL;
 		}
 		rds_ib_stats_inc(s_ib_rx_total_incs);
