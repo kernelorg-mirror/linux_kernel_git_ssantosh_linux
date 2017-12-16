@@ -110,7 +110,7 @@ static int rds_ib_recv_alloc_cache(struct rds_ib_refill_cache *cache)
 
 	cache->percpu = alloc_percpu(struct rds_ib_cache_head);
 	if (!cache->percpu)
-	       return -ENOMEM;
+		return -ENOMEM;
 
 	for_each_possible_cpu(cpu) {
 		head = per_cpu_ptr(cache->percpu, cpu);
@@ -462,8 +462,7 @@ void rds_ib_recv_refill(struct rds_connection *conn, int prefill, gfp_t gfp)
 	while ((prefill || rds_conn_up(conn)) &&
 	       rds_ib_ring_alloc(&ic->i_recv_ring, 1, &pos)) {
 		if (pos >= ic->i_recv_ring.w_nr) {
-			printk(KERN_NOTICE "Argh - ring alloc returned pos=%u\n",
-					pos);
+			pr_notice("Argh - ring alloc returned pos=%u\n", pos);
 			break;
 		}
 

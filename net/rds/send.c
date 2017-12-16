@@ -1130,15 +1130,15 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 	}
 
 	if (rm->rdma.op_active && !conn->c_trans->xmit_rdma) {
-		printk_ratelimited(KERN_NOTICE "rdma_op %p conn xmit_rdma %p\n",
-			       &rm->rdma, conn->c_trans->xmit_rdma);
+		pr_notice_ratelimited("rdma_op %p conn xmit_rdma %p\n",
+				      &rm->rdma, conn->c_trans->xmit_rdma);
 		ret = -EOPNOTSUPP;
 		goto out;
 	}
 
 	if (rm->atomic.op_active && !conn->c_trans->xmit_atomic) {
-		printk_ratelimited(KERN_NOTICE "atomic_op %p conn xmit_atomic %p\n",
-			       &rm->atomic, conn->c_trans->xmit_atomic);
+		pr_notice_ratelimited("atomic_op %p conn xmit_atomic %p\n",
+				      &rm->atomic, conn->c_trans->xmit_atomic);
 		ret = -EOPNOTSUPP;
 		goto out;
 	}

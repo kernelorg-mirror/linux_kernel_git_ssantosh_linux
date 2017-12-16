@@ -90,7 +90,7 @@ rds_ib_tune_rnr(struct rds_ib_connection *ic, struct ib_qp_attr *attr)
 	attr->min_rnr_timer = IB_RNR_TIMER_000_32;
 	ret = ib_modify_qp(ic->i_cm_id->qp, attr, IB_QP_MIN_RNR_TIMER);
 	if (ret)
-		printk(KERN_NOTICE "ib_modify_qp(IB_QP_MIN_RNR_TIMER): err=%d\n", -ret);
+		pr_notice("ib_modify_qp(IB_QP_MIN_RNR_TIMER): err=%d\n", -ret);
 }
 
 static inline u16 rds_ib_get_frag(unsigned int version, u16 ib_frag)
@@ -221,13 +221,12 @@ void rds_ib_cm_connect_complete(struct rds_connection *conn, struct rdma_cm_even
 	qp_attr.qp_state = IB_QPS_RTS;
 	err = ib_modify_qp(ic->i_cm_id->qp, &qp_attr, IB_QP_STATE);
 	if (err)
-		printk(KERN_NOTICE "ib_modify_qp(IB_QP_STATE, RTS): err=%d\n", err);
+		pr_notice("ib_modify_qp(IB_QP_STATE, RTS): err=%d\n", err);
 
 	/* update ib_device with this local ipaddr */
 	err = rds_ib_update_ipaddr(ic->rds_ibdev, conn->c_laddr);
 	if (err)
-		printk(KERN_ERR "rds_ib_update_ipaddr failed (%d)\n",
-			err);
+		pr_err("rds_ib_update_ipaddr failed (%d)\n", err);
 
 	/* If the peer gave us the last packet it saw, process this as if
 	 * we had received a regular ACK. */
@@ -679,8 +678,7 @@ static u32 rds_ib_protocol_compatible(struct rdma_cm_event *event)
 
 	/* Be paranoid. RDS always has privdata */
 	if (!event->param.conn.private_data_len) {
-		printk(KERN_NOTICE "RDS incoming connection has no private data, "
-			"rejecting\n");
+		pr_notice("RDS incoming connection has no private data, rejecting\n");
 		return 0;
 	}
 
@@ -694,11 +692,12 @@ static u32 rds_ib_protocol_compatible(struct rdma_cm_event *event)
 		version = RDS_PROTOCOL_3_0;
 		while ((common >>= 1) != 0)
 			version++;
-	} else
-		printk_ratelimited(KERN_NOTICE "RDS: Connection from %pI4 using incompatible protocol version %u.%u\n",
-				&dp->dp_saddr,
-				dp->dp_protocol_major,
-				dp->dp_protocol_minor);
+	} else {
+		pr_notice_ratelimited("RDS: Connection from %pI4 using incompatible protocol version %u.%u\n",
+				      &dp->dp_saddr,
+				      dp->dp_protocol_major,
+				      dp->dp_protocol_minor);
+	}
 	return version;
 }
 
