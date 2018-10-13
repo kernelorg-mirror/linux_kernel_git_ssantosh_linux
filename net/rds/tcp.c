@@ -453,12 +453,6 @@ static void rds_tcp_destroy_conns(void)
 
 static void rds_tcp_exit(void);
 
-static u8 rds_tcp_get_tos_map(u8 tos)
-{
-	/* all user tos mapped to default 0 for TCP transport */
-	return 0;
-}
-
 struct rds_transport rds_tcp_transport = {
 	.laddr_check		= rds_tcp_laddr_check,
 	.xmit_path_prepare	= rds_tcp_xmit_path_prepare,

@@ -136,6 +136,7 @@ int rds_tcp_accept_one(struct socket *sock)
 	struct in6_addr saddr, daddr;
 #endif
 	int dev_if = 0;
+	u8 tos;
 
 	if (!sock) /* module unload or netns delete in progress */
 		return -ENETUNREACH;
@@ -198,14 +199,22 @@ int rds_tcp_accept_one(struct socket *sock)
 	}
 #endif
 
+	tos = rds_tcp_get_tos_map(0);
+	ret = kernel_setsockopt(new_sock, IPPROTO_IP, IP_TOS, &tos,
+				sizeof(tos));
+	if (ret < 0)
+		goto out;
+
 	conn = rds_conn_create(sock_net(sock->sk),
 			       my_addr, peer_addr,
-			       &rds_tcp_transport, 0, GFP_KERNEL, dev_if);
+			       &rds_tcp_transport, tos, GFP_KERNEL, dev_if);
 
 	if (IS_ERR(conn)) {
 		ret = PTR_ERR(conn);
 		goto out;
 	}
+	conn->c_tos = tos;
+
 	/* An incoming SYN request came in, and TCP just accepted it.
 	 *
 	 * If the client reboots, this conn will need to be cleaned up.

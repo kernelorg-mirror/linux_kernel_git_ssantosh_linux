@@ -96,4 +96,9 @@ DECLARE_PER_CPU(struct rds_tcp_statistics, rds_tcp_stats);
 unsigned int rds_tcp_stats_info_copy(struct rds_info_iterator *iter,
 				     unsigned int avail);
 
+static inline u8 rds_tcp_get_tos_map(u8 tos)
+{
+	/* all user tos mapped to default 0 for TCP transport */
+	return 0;
+}
 #endif
