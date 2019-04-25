@@ -158,8 +158,9 @@ static int rds_pin_pages(unsigned long user_addr, unsigned int nr_pages,
 {
 	int ret;
 
-	ret = get_user_pages_fast(user_addr, nr_pages, write, pages);
-
+      /* get_user_pages return -EOPNOTSUPP for fs_dax memory */
+	ret = get_user_pages_longterm(user_addr, nr_pages,
+				      write, pages, NULL);
 	if (ret >= 0 && ret < nr_pages) {
 		while (ret--)
 			put_page(pages[ret]);
