@@ -60,6 +60,7 @@ static unsigned long rds_ib_sysctl_max_unsig_wr_max = 64;
  * will cause credits to be added before protocol negotiation.
  */
 unsigned int rds_ib_sysctl_flow_control = 0;
+unsigned int rds_ib_sysctl_odp_support;
 
 static struct ctl_table rds_ib_sysctl_table[] = {
 	{
@@ -102,6 +103,13 @@ static struct ctl_table rds_ib_sysctl_table[] = {
 		.maxlen		= sizeof(rds_ib_sysctl_flow_control),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname       = "odp_support",
+		.data           = &rds_ib_sysctl_odp_support,
+		.maxlen         = sizeof(rds_ib_sysctl_odp_support),
+		.mode           = 0444,
+		.proc_handler   = proc_dointvec,
 	},
 	{ }
 };
